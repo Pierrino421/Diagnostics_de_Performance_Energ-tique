@@ -1,4 +1,3 @@
-
 # =============================================================
 #  PROJET DPE — Séance 1
 #  Stack : Kafka (KRaft) + MinIO (Data Lake)
@@ -10,7 +9,7 @@ networks:
     driver: bridge
 
 volumes:
-  minio-data:               # Persistance des données MinIO
+  minio-data:
 
 # =============================================================
 services:
@@ -20,13 +19,14 @@ services:
   # -----------------------------------------------------------
   kafka:
     image: confluentinc/cp-kafka:7.7.0
+    platform: linux/amd64
     container_name: kafka
     hostname: kafka
     networks:
       - dpe-network
     ports:
-      - "9092:9092"         # Pour les producers/consumers dans les conteneurs
-      - "9094:9094"         # Pour les connexions depuis ta machine locale
+      - "9092:9092"
+      - "9094:9094"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -40,7 +40,7 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"  # On crée les topics manuellement
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_LOG_RETENTION_HOURS: 168
     healthcheck:
       test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
@@ -49,11 +49,11 @@ services:
       retries: 5
 
   # -----------------------------------------------------------
-  # 2. KAFKA UI — Visualiser les topics et messages
-  #    Accès : http://localhost:8090
+  # 2. KAFKA UI
   # -----------------------------------------------------------
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
+    platform: linux/amd64
     container_name: kafka-ui
     networks:
       - dpe-network
@@ -67,37 +67,36 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka:9092"
 
   # -----------------------------------------------------------
-  # 3. MINIO — Data Lake (stockage objet compatible S3)
-  #    Console web : http://localhost:9001
-  #    API S3      : http://localhost:9000
+  # 3. MINIO — Data Lake
   # -----------------------------------------------------------
   minio:
     image: minio/minio:latest
+    platform: linux/amd64
     container_name: minio
     hostname: minio
     networks:
       - dpe-network
     ports:
-      - "9000:9000"         # API S3 (utilisée par le consumer Python)
-      - "9001:9001"         # Console web MinIO
+      - "9000:9000"
+      - "9001:9001"
     environment:
-      MINIO_ROOT_USER: admin          # Login console MinIO
-      MINIO_ROOT_PASSWORD: admin123   # Mot de passe (min 8 caractères)
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: admin123
     volumes:
-      - minio-data:/data              # Persistance des fichiers
+      - minio-data:/data
     command: server /data --console-address ":9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
 
   # -----------------------------------------------------------
-  # 4. MINIO INIT — Crée automatiquement le bucket "datalake"
-  #    Ce conteneur s'exécute une fois puis s'arrête
+  # 4. MINIO INIT — création bucket datalake
   # -----------------------------------------------------------
   minio-init:
     image: minio/mc:latest
+    platform: linux/amd64
     container_name: minio-init
     networks:
       - dpe-network
@@ -106,7 +105,8 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
+      sleep 5;
       mc alias set local http://minio:9000 admin admin123;
       mc mb --ignore-existing local/datalake;
-      echo '✅ Bucket datalake créé avec succès';
+      echo 'Bucket datalake créé avec succès';
       "
