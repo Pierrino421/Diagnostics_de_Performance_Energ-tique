@@ -14,11 +14,11 @@ from kafka.errors import TopicAlreadyExistsError
 # Connexion au broker Kafka
 # Si tu exécutes ce script depuis ta machine locale → "localhost:9094"
 # Si tu exécutes depuis un conteneur Docker         → "kafka:9092"
-KAFKA_BROKER = "localhost:9094"
+KAFKA_BOOTSTRAP_SERVERS = "kafka:9092"
 TOPIC_NAME   = "open-data"
 
 def creer_topic():
-    admin = KafkaAdminClient(bootstrap_servers=KAFKA_BROKER)
+    admin = KafkaAdminClient(bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS)
 
     topic = NewTopic(
         name=TOPIC_NAME,

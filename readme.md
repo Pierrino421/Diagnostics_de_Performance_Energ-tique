@@ -11,22 +11,29 @@ API ADEME → Kafka (topic: open-data) → MinIO (datalake/bronze/)
 ## Prérequis
 
 - Docker Desktop installé et lancé
-- Python 3.10+
-- pip
+
+> 💡 Pas besoin d'installer Python sur ta machine, tout tourne dans Docker.
 
 ---
 
 ## Structure du projet
 
 ```
-projet-dpe/
-├── docker-compose.yml          ← Infrastructure (Kafka + MinIO)
-├── requirements.txt            ← Dépendances Python
-├── kafka/
-│   ├── create_topic.py         ← Crée le topic "open-data"
-│   ├── producer.py             ← Télécharge l'API ADEME et envoie dans Kafka
-│   └── consumer.py             ← Lit Kafka et écrit dans MinIO/bronze
-└── README.md
+PROJETBIGDATA/
+├── docker-compose.yml              ← Infrastructure (Kafka + MinIO + App)
+├── Dockerfile                      ← Environnement Python 3.11.9
+├── requirements.txt                ← Dépendances Python
+├── readme.md
+├── datalake/                       ← Données locales (si besoin)
+└── pipelines/
+    ├── kafka/
+    │   ├── create_topic.py         ← Crée le topic "open-data"
+    │   ├── producer.py             ← Télécharge l'API ADEME → envoie dans Kafka
+    │   └── consumer.py             ← Lit Kafka → écrit dans MinIO/bronze
+    ├── airflow/                    ← Orchestration (séances suivantes)
+    ├── spark/                      ← Traitement des données (séances suivantes)
+    ├── analyse/                    ← Data analyse (séances suivantes)
+    └── ml/                         ← Machine learning (séances suivantes)
 ```
 
 ---
@@ -34,9 +41,8 @@ projet-dpe/
 ## Étape 1 — Vérifier les prérequis
 
 ```bash
-docker --version    # Docker 20+ attendu
-python --version    # Python 3.10+ attendu
-pip --version
+docker --version
+docker-compose --version
 ```
 
 ---
@@ -47,7 +53,7 @@ pip --version
 docker-compose up -d
 ```
 
-Attendre ~30 secondes, puis vérifier que tout tourne :
+Attendre ~30 secondes, puis vérifier :
 
 ```bash
 docker-compose ps
@@ -72,18 +78,27 @@ minio-init   Exited (0)      ← normal, il s'arrête après avoir créé le buc
 
 ---
 
-## Étape 3 — Installer les dépendances Python
+## Étape 3 — Builder le conteneur Python
 
 ```bash
-pip install -r requirements.txt
+docker-compose build app
 ```
+
+Résultat attendu :
+```
+ => [app] FROM python:3.11.9-slim
+ => [app] pip install -r requirements.txt
+ => [app] FINISHED
+```
+
+> 💡 À relancer uniquement si tu modifies `requirements.txt`. Sinon Docker utilise le cache.
 
 ---
 
 ## Étape 4 — Créer le topic Kafka
 
 ```bash
-python kafka/create_topic.py
+docker-compose run --rm app python pipelines/kafka/create_topic.py
 ```
 
 Résultat attendu :
@@ -104,7 +119,7 @@ Les données transitent en mémoire → Kafka.
 
 **Test minimal — 100 lignes (commencer par ici) :**
 ```bash
-python kafka/producer.py --limite 100
+docker-compose run --rm app python pipelines/kafka/producer.py --limite 100
 ```
 
 Résultat attendu :
@@ -128,17 +143,17 @@ Résultat attendu :
 
 **Test intermédiaire — 1000 lignes :**
 ```bash
-python kafka/producer.py --limite 1000
+docker-compose run --rm app python pipelines/kafka/producer.py --limite 1000
 ```
 
 **Reprendre si le script a été interrompu à la ligne 5000 :**
 ```bash
-python kafka/producer.py --offset 5000 --limite 1000
+docker-compose run --rm app python pipelines/kafka/producer.py --offset 5000 --limite 1000
 ```
 
 **Envoi complet du dataset (~6 millions de lignes) :**
 ```bash
-python kafka/producer.py
+docker-compose run --rm app python pipelines/kafka/producer.py
 ```
 
 Vérification : Kafka UI → **Topics** → **open-data** → onglet **Messages**
@@ -152,12 +167,12 @@ Ouvrir un **nouveau terminal** et lancer :
 
 **Test avec batch de 50 messages :**
 ```bash
-python kafka/consumer.py --batch-size 50
+docker-compose run --rm app python pipelines/kafka/consumer.py --batch-size 50
 ```
 
 **Lancement normal (batch de 200 messages par défaut) :**
 ```bash
-python kafka/consumer.py
+docker-compose run --rm app python pipelines/kafka/consumer.py
 ```
 
 Résultat attendu :
@@ -198,18 +213,19 @@ datalake/
 ## Résumé du flux de test
 
 ```
-[Terminal 1]                         [Terminal 2]
-─────────────────────────────        ───────────────────────────
-python kafka/producer.py             python kafka/consumer.py
-    --limite 100                         --batch-size 50
-         │                                      │
-         │   100 messages JSON                  │
-         ▼                                      │
-   [Kafka topic]  ──────────────────────────▶  MinIO
-    "open-data"                             datalake/
-                                            └── bronze/
-                                                └── date=2025-03-05/
-                                                    └── dpe_1430.json ✅
+[Terminal 1]                              [Terminal 2]
+──────────────────────────────────        ──────────────────────────────
+docker-compose run --rm app \             docker-compose run --rm app \
+  python pipelines/kafka/producer.py \      python pipelines/kafka/consumer.py
+  --limite 100                              --batch-size 50
+         │                                        │
+         │   100 messages JSON                    │
+         ▼                                        │
+   [Kafka topic]  ────────────────────────▶  MinIO
+    "open-data"                           datalake/
+                                          └── bronze/
+                                              └── date=2025-03-05/
+                                                  └── dpe_1430.json ✅
 ```
 
 ---
@@ -228,7 +244,6 @@ docker-compose down -v    # Arrête ET supprime les volumes (repart à zéro)
 | Problème | Cause | Solution |
 |----------|-------|----------|
 | `NoBrokersAvailable` | Kafka pas encore prêt | Attendre 30s, vérifier `docker-compose ps` |
-| `Connection refused 9094` | Mauvais port | Utiliser `localhost:9094` depuis ta machine |
 | `Bucket not found` | `minio-init` a échoué | Créer le bucket manuellement dans la console MinIO |
 | `Timeout` API ADEME | Connexion lente | Normal, le script réessaie automatiquement |
 | `Exited (1)` sur kafka | Erreur de config | Lancer `docker-compose logs kafka` pour voir l'erreur |

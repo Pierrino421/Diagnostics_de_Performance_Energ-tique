@@ -10,6 +10,7 @@ Usage :
     python consumer.py --batch-size 100   (écrit dans MinIO tous les 100 messages)
 """
 
+import os
 import json
 import argparse
 from datetime import datetime
@@ -20,15 +21,19 @@ from minio import Minio
 from minio.error import S3Error
 
 # ── Configuration ──────────────────────────────────────────────
-KAFKA_BROKER   = "localhost:9094"
+# os.getenv("VAR", "valeur_par_defaut") :
+#   → Dans Docker  : utilise la variable d'environnement définie dans docker-compose
+#   → En local     : utilise la valeur par défaut (localhost)
+# Le même script fonctionne dans les deux contextes sans modification
+KAFKA_BROKER   = os.getenv("KAFKA_BROKER",   "localhost:9094")
 TOPIC_NAME     = "open-data"
 CONSUMER_GROUP = "dpe-consumer-group"   # Groupe de consommateurs Kafka
                                         # Permet à plusieurs consumers de se
                                         # coordonner sur les partitions
 
-MINIO_ENDPOINT = "localhost:9000"
-MINIO_USER     = "admin"
-MINIO_PASSWORD = "admin123"
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+MINIO_USER     = os.getenv("MINIO_USER",     "admin")
+MINIO_PASSWORD = os.getenv("MINIO_PASSWORD", "admin123")
 BUCKET_NAME    = "datalake"
 
 BATCH_SIZE_DEFAULT = 200    # Nombre de messages avant écriture dans MinIO

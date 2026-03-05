@@ -13,6 +13,7 @@ Usage :
     python producer.py --offset 5000    (reprend à partir de la ligne 5000)
 """
 
+import os
 import json
 import time
 import argparse
@@ -21,7 +22,11 @@ from kafka import KafkaProducer
 from kafka.errors import KafkaError
 
 # ── Configuration Kafka ────────────────────────────────────────
-KAFKA_BROKER = "localhost:9094"
+# os.getenv("KAFKA_BROKER", "localhost:9094") signifie :
+#   → Si la variable KAFKA_BROKER existe (définie dans Docker) : on l'utilise
+#   → Sinon on utilise "localhost:9094" (exécution locale)
+# Le même script fonctionne ainsi dans les deux contextes
+KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9094")
 TOPIC_NAME   = "open-data"
 DELAI_MS     = 5                # Délai entre messages (ms)
 

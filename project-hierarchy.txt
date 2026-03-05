@@ -1,0 +1,25 @@
+projetBigData
+├─ datalake
+│  ├─ bronze
+│  │  
+│  ├─ gold
+│  │  
+│  └─ silver
+│     
+├─ docker-compose.yml
+├─ dockerfile
+├─ pipelines
+│  ├─ airflow
+│  │  
+│  ├─ analyse
+│  │  
+│  ├─ kafka
+│  │  ├─ consumer.py
+│  │  ├─ create_topic.py
+│  │  └─ producer.py
+│  ├─ ml
+│  │  
+│  └─ spark
+│     
+├─ readme.md
+└─ requirements.txt
