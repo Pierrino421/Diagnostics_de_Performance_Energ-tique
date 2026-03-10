@@ -119,7 +119,8 @@ Les données transitent en mémoire → Kafka.
 
 **Test minimal — 100 lignes (commencer par ici) :**
 ```bash
-docker-compose run --rm app python pipelines/kafka/producer.py --limite 100
+docker-compose run --rm app python pipelines/kafka/producer_existant.py --limite 100
+docker-compose run --rm app python pipelines/kafka/producer_neuf.py --limite 100
 ```
 
 Résultat attendu :
@@ -130,7 +131,7 @@ Résultat attendu :
   Lignes disponibles : 6 245 301
   Lignes à envoyer   : 100
   Départ offset      : 0
-  Topic Kafka        : open-data
+  Topic Kafka        : open-data-existant, open-data-neuf
   Pages de           : 100 lignes
 =======================================================
 
@@ -139,21 +140,6 @@ Résultat attendu :
 
   Messages envoyés : 100
   Erreurs          : 0
-```
-
-**Test intermédiaire — 1000 lignes :**
-```bash
-docker-compose run --rm app python pipelines/kafka/producer.py --limite 1000
-```
-
-**Reprendre si le script a été interrompu à la ligne 5000 :**
-```bash
-docker-compose run --rm app python pipelines/kafka/producer.py --offset 5000 --limite 1000
-```
-
-**Envoi complet du dataset (~6 millions de lignes) :**
-```bash
-docker-compose run --rm app python pipelines/kafka/producer.py
 ```
 
 Vérification : Kafka UI → **Topics** → **open-data** → onglet **Messages**
@@ -169,12 +155,6 @@ Ouvrir un **nouveau terminal** et lancer :
 ```bash
 docker-compose run --rm app python pipelines/kafka/consumer.py --batch-size 50
 ```
-
-**Lancement normal (batch de 200 messages par défaut) :**
-```bash
-docker-compose run --rm app python pipelines/kafka/consumer.py
-```
-
 Résultat attendu :
 ```
 ✅ Connecté à MinIO (localhost:9000)
