@@ -1,13 +1,15 @@
 """
 consumer.py
 -----------
-Consomme les messages du topic Kafka "open-data"
-et les écrit dans MinIO dans la couche Bronze :
-    datalake / bronze / date=YYYY-MM-DD / dpe_HHMM.json
+Consomme les messages des topics Kafka "open-data" et "open-data-neuf"
+et les écrit dans MinIO dans la couche Bronze avec dossiers séparés :
+
+    datalake / bronze / existant / date=YYYY-MM-DD / dpe_HHMM.json
+    datalake / bronze / neuf     / date=YYYY-MM-DD / dpe_HHMM.json
 
 Usage :
-    python consumer.py
-    python consumer.py --batch-size 100   (écrit dans MinIO tous les 100 messages)
+    python consumer.py                         (écoute les deux topics)
+    python consumer.py --batch-size 100
 """
 
 import os
@@ -21,67 +23,68 @@ from minio import Minio
 from minio.error import S3Error
 
 # ── Configuration ──────────────────────────────────────────────
-# os.getenv("VAR", "valeur_par_defaut") :
-#   → Dans Docker  : utilise la variable d'environnement définie dans docker-compose
-#   → En local     : utilise la valeur par défaut (localhost)
-# Le même script fonctionne dans les deux contextes sans modification
 KAFKA_BROKER   = os.getenv("KAFKA_BROKER",   "localhost:9094")
-TOPIC_NAME     = "open-data"
-CONSUMER_GROUP = "dpe-consumer-group"   # Groupe de consommateurs Kafka
-                                        # Permet à plusieurs consumers de se
-                                        # coordonner sur les partitions
+CONSUMER_GROUP = "dpe-consumer-group"
 
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
 MINIO_USER     = os.getenv("MINIO_USER",     "admin")
 MINIO_PASSWORD = os.getenv("MINIO_PASSWORD", "admin123")
 BUCKET_NAME    = "datalake"
 
-BATCH_SIZE_DEFAULT = 200    # Nombre de messages avant écriture dans MinIO
+# Mapping topic Kafka → dossier MinIO
+# Clé   : nom du topic Kafka
+# Valeur : sous-dossier dans bronze/
+TOPICS = {
+    "open-data-existant"     : "existant",   
+    "open-data-neuf": "neuf",       
+}
+
+BATCH_SIZE_DEFAULT = 200
 # ───────────────────────────────────────────────────────────────
 
 
-def construire_chemin_minio() -> str:
+def construire_chemin_minio(sous_dossier: str) -> str:
     """
-    Construit le chemin de stockage dans MinIO.
-    Format : bronze/date=2025-03-05/dpe_1430.json
-                                         ↑ heure et minute courantes
+    Construit le chemin de stockage dans MinIO selon le topic source.
+
+    Paramètres :
+        sous_dossier : "existant" ou "neuf" selon le topic d'origine
+
+    Exemples :
+        → bronze/existant/date=2026-03-05/dpe_1430.json
+        → bronze/neuf/date=2026-03-05/dpe_1430.json
     """
     maintenant = datetime.now()
-    date_str   = maintenant.strftime("%Y-%m-%d")      # ex: 2025-03-05
-    heure_str  = maintenant.strftime("%H%M")          # ex: 1430
+    date_str   = maintenant.strftime("%Y-%m-%d")
+    heure_str  = maintenant.strftime("%H%M%S")    # secondes incluses pour éviter les doublons
 
-    return f"bronze/date={date_str}/dpe_{heure_str}.json"
+    return f"bronze/{sous_dossier}/date={date_str}/dpe_{heure_str}.json"
 
 
-def ecrire_dans_minio(client_minio: Minio, messages: list):
+def ecrire_dans_minio(client_minio: Minio, messages: list, sous_dossier: str):
     """
     Écrit un batch de messages JSON dans MinIO.
 
     Paramètres :
         client_minio : client MinIO connecté
         messages     : liste de dict Python à sauvegarder
+        sous_dossier : "existant" ou "neuf" — détermine le dossier de destination
     """
-    chemin = construire_chemin_minio()
+    chemin = construire_chemin_minio(sous_dossier)
 
-    # Convertit la liste de messages en JSON (1 objet par ligne = JSONL)
-    # Le format JSONL (JSON Lines) est standard en Data Engineering :
-    # chaque ligne est un JSON valide, facile à lire ligne par ligne
     contenu_jsonl = "\n".join(json.dumps(msg, ensure_ascii=False) for msg in messages)
     contenu_bytes = contenu_jsonl.encode("utf-8")
-
-    # BytesIO transforme les bytes en un "faux fichier" lisible par MinIO
-    fichier = BytesIO(contenu_bytes)
-    taille  = len(contenu_bytes)
+    fichier       = BytesIO(contenu_bytes)
 
     try:
         client_minio.put_object(
             bucket_name=BUCKET_NAME,
             object_name=chemin,
             data=fichier,
-            length=taille,
+            length=len(contenu_bytes),
             content_type="application/json"
         )
-        print(f"💾 {len(messages)} messages écrits → MinIO : {BUCKET_NAME}/{chemin}")
+        print(f"💾 [{sous_dossier}] {len(messages)} messages → {BUCKET_NAME}/{chemin}")
 
     except S3Error as e:
         print(f"❌ Erreur MinIO : {e}")
@@ -89,10 +92,8 @@ def ecrire_dans_minio(client_minio: Minio, messages: list):
 
 def consommer(batch_size: int):
     """
-    Écoute le topic Kafka et écrit dans MinIO par batch.
-
-    Paramètres :
-        batch_size : nombre de messages accumulés avant écriture dans MinIO
+    Écoute les deux topics Kafka en même temps et écrit dans MinIO.
+    Chaque topic est redirigé vers son propre dossier dans bronze/.
     """
 
     # ── Connexion MinIO ────────────────────────────────────────
@@ -100,47 +101,60 @@ def consommer(batch_size: int):
         MINIO_ENDPOINT,
         access_key=MINIO_USER,
         secret_key=MINIO_PASSWORD,
-        secure=False            # False car on est en local (pas de HTTPS)
+        secure=False
     )
     print(f"✅ Connecté à MinIO ({MINIO_ENDPOINT})")
 
-    # ── Connexion Kafka Consumer ───────────────────────────────
+    # ── Connexion Kafka — abonnement aux DEUX topics ───────────
+    # On passe une liste de topics à KafkaConsumer
+    # Il écoute les deux en parallèle dans la même boucle
     consumer = KafkaConsumer(
-        TOPIC_NAME,
+        *TOPICS.keys(),                  # dépaquète le dict → "open-data", "open-data-neuf"
         bootstrap_servers=KAFKA_BROKER,
         group_id=CONSUMER_GROUP,
-        auto_offset_reset="earliest",   # Relit depuis le début si nouveau groupe
-        enable_auto_commit=True,        # Valide automatiquement la position de lecture
+        auto_offset_reset="earliest",
+        enable_auto_commit=True,
         value_deserializer=lambda msg: json.loads(msg.decode("utf-8")),
-        consumer_timeout_ms=10000       # S'arrête si aucun message pendant 10s
+        consumer_timeout_ms=10000
     )
-    print(f"✅ Consumer connecté au topic '{TOPIC_NAME}'")
+    print(f"✅ Consumer abonné aux topics : {list(TOPICS.keys())}")
     print(f"⚙️  Écriture dans MinIO tous les {batch_size} messages")
-    print("-" * 50)
+    print("-" * 55)
 
-    # ── Lecture des messages ───────────────────────────────────
-    batch    = []    # Buffer qui accumule les messages avant écriture
-    total    = 0
+    # ── Buffers séparés par topic ──────────────────────────────
+    # Un buffer par topic pour ne pas mélanger les données
+    # Exemple : batches = {"open-data": [...], "open-data-neuf": [...]}
+    batches = {topic: [] for topic in TOPICS}
+    totaux  = {topic: 0  for topic in TOPICS}
 
     for message in consumer:
-        batch.append(message.value)   # message.value = le dict Python désérialisé
-        total += 1
 
-        # Quand le batch est plein → on écrit dans MinIO et on vide le buffer
-        if len(batch) >= batch_size:
-            ecrire_dans_minio(client_minio, batch)
-            batch = []
+        topic       = message.topic           # "open-data" ou "open-data-neuf"
+        sous_dossier = TOPICS.get(topic, "inconnu")
 
-    # ── Écrit le dernier batch (souvent incomplet) ─────────────
-    if batch:
-        print(f"📦 Écriture du dernier batch ({len(batch)} messages)...")
-        ecrire_dans_minio(client_minio, batch)
+        batches[topic].append(message.value)
+        totaux[topic] += 1
+
+        # Quand le batch du topic est plein → écriture dans MinIO
+        if len(batches[topic]) >= batch_size:
+            ecrire_dans_minio(client_minio, batches[topic], sous_dossier)
+            batches[topic] = []   # Vide le buffer après écriture
+
+    # ── Écrit les derniers batches incomplets ──────────────────
+    for topic, batch in batches.items():
+        if batch:
+            sous_dossier = TOPICS[topic]
+            print(f"📦 Dernier batch [{sous_dossier}] : {len(batch)} messages...")
+            ecrire_dans_minio(client_minio, batch, sous_dossier)
 
     consumer.close()
 
-    print("-" * 50)
-    print(f"✅ Consommation terminée ! Total : {total} messages traités")
-    print(f"📁 Données disponibles dans MinIO : {BUCKET_NAME}/bronze/")
+    print("-" * 55)
+    print(f"✅ Consommation terminée !")
+    for topic, total in totaux.items():
+        sous_dossier = TOPICS[topic]
+        print(f"   [{sous_dossier}] : {total:,} messages traités")
+    print(f"📁 Données dans MinIO : {BUCKET_NAME}/bronze/existant/ et bronze/neuf/")
 
 
 # ── Point d'entrée ─────────────────────────────────────────────

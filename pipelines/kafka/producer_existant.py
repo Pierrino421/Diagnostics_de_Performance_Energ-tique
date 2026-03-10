@@ -27,7 +27,7 @@ from kafka.errors import KafkaError
 #   → Sinon on utilise "localhost:9094" (exécution locale)
 # Le même script fonctionne ainsi dans les deux contextes
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9094")
-TOPIC_NAME   = "open-data"
+TOPIC_NAME   = "open-data-existant"
 DELAI_MS     = 5                # Délai entre messages (ms)
 
 # ── Configuration API ADEME ────────────────────────────────────
@@ -36,7 +36,7 @@ DELAI_MS     = 5                # Délai entre messages (ms)
 #   - size   : nombre de lignes par page (max recommandé : 100)
 #   - page   : numéro de page (commence à 0)
 #   - format : json
-API_URL   = "https://data.ademe.fr/data-fair/api/v1/datasets/dpe03existant"
+API_URL   = "https://data.ademe.fr/data-fair/api/v1/datasets/dpe03existant/lines"
 PAGE_SIZE = 100     # Lignes par requête — on pagine pour ne pas surcharger la mémoire
 # ───────────────────────────────────────────────────────────────
 
@@ -52,13 +52,9 @@ def creer_producer() -> KafkaProducer:
 
 
 def compter_total_lignes() -> int:
-    """
-    Interroge l'API pour connaître le nombre total de lignes disponibles.
-    On récupère juste 1 ligne pour lire le champ "total" dans la réponse.
-    """
     try:
         response = requests.get(API_URL, params={"size": 1}, timeout=10)
-        response.raise_for_status()
+        response.raise_for_status() 
         return response.json().get("total", 0)
     except Exception as e:
         print(f"⚠️  Impossible de compter les lignes : {e}")
@@ -78,7 +74,7 @@ def telecharger_page(numero_page: int, taille: int) -> list:
     """
     params = {
         "size"  : taille,
-        "page"  : numero_page,
+        "from"  : numero_page*taille,  # from = offset = page * taille
         "format": "json"
     }
 

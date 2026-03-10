@@ -1,42 +1,54 @@
 """
 create_topic.py
 ---------------
-Crée le topic Kafka "open-data" avec ses paramètres.
-À exécuter UNE SEULE FOIS avant de lancer le producer.
+Crée les topics Kafka nécessaires au projet DPE.
+À exécuter UNE SEULE FOIS avant de lancer les producers.
+
+Topics créés :
+    - open-data      → DPE logements existants (dpe03existant)
+    - open-data-neuf → DPE logements neufs     (dpe02neuf)
 
 Usage :
     python create_topic.py
 """
 
+import os
 from kafka.admin import KafkaAdminClient, NewTopic
 from kafka.errors import TopicAlreadyExistsError
 
-# Connexion au broker Kafka
-# Si tu exécutes ce script depuis ta machine locale → "localhost:9094"
-# Si tu exécutes depuis un conteneur Docker         → "kafka:9092"
-KAFKA_BOOTSTRAP_SERVERS = "kafka:9092"
-TOPIC_NAME   = "open-data"
+KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9094")
 
-def creer_topic():
-    admin = KafkaAdminClient(bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS)
+# Liste de tous les topics à créer
+# Pour en ajouter un nouveau : rajouter simplement une ligne ici
+TOPICS = [
+    "open-data-existant",        # DPE logements existants
+    "open-data-neuf",   # DPE logements neufs
+]
 
-    topic = NewTopic(
-        name=TOPIC_NAME,
-        num_partitions=3,       # 3 partitions = traitement parallèle possible
-        replication_factor=1    # 1 seul broker en local donc 1 réplique max
-    )
+def creer_topics():
+    admin = KafkaAdminClient(bootstrap_servers=KAFKA_BROKER)
 
-    try:
-        admin.create_topics([topic])
-        print(f"✅ Topic '{TOPIC_NAME}' créé avec succès !")
-        print(f"   - Partitions        : 3")
-        print(f"   - Replication factor: 1")
+    print("=" * 45)
+    print("  Création des topics Kafka — Projet DPE")
+    print("=" * 45)
 
-    except TopicAlreadyExistsError:
-        print(f"⚠️  Le topic '{TOPIC_NAME}' existe déjà.")
+    for nom_topic in TOPICS:
+        topic = NewTopic(
+            name=nom_topic,
+            num_partitions=3,       # 3 partitions = traitement parallèle possible
+            replication_factor=1    # 1 seul broker en local donc 1 réplique max
+        )
+        try:
+            admin.create_topics([topic])
+            print(f"  ✅ '{nom_topic}' créé (3 partitions, replication: 1)")
 
-    finally:
-        admin.close()
+        except TopicAlreadyExistsError:
+            print(f"  ⚠️  '{nom_topic}' existe déjà → ignoré")
+
+    admin.close()
+    print("=" * 45)
+    print("  Terminé ! Vérifier dans Kafka UI → Topics")
+    print("=" * 45)
 
 if __name__ == "__main__":
-    creer_topic()
+    creer_topics()
