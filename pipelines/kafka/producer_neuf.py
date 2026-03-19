@@ -27,7 +27,7 @@ TOPIC_NAME   = "open-data-neuf"
 
 # ── Configuration API ADEME ────────────────────────────────────
 API_URL   = "https://data.ademe.fr/data-fair/api/v1/datasets/dpe02neuf/lines"
-PAGE_SIZE = 100
+PAGE_SIZE = 50
 # ───────────────────────────────────────────────────────────────
 
 
