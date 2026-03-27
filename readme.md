@@ -150,18 +150,9 @@ docker-compose run --rm app python pipelines/kafka/producer.py
 
 **Test minimal — 100 lignes :**
 ```bash
-docker-compose run --rm app python pipelines/kafka/producer_neuf.py --limite 100
+docker-compose run --rm app python pipelines/kafka/producer_existant.py --limite 80000 --offset 1000000
 ```
 
-**Test intermédiaire — 1000 lignes :**
-```bash
-docker-compose run --rm app python pipelines/kafka/producer_neuf.py --limite 1000
-```
-
-**Reprendre si interrompu à la ligne 5000 :**
-```bash
-docker-compose run --rm app python pipelines/kafka/producer_neuf.py --offset 5000 --limite 1000
-```
 
 **Envoi complet :**
 ```bash
@@ -200,12 +191,18 @@ Ouvrir un **nouveau terminal** et lancer :
 
 **Test avec batch de 50 messages :**
 ```bash
-docker-compose run --rm app python pipelines/kafka/consumer.py --batch-size 50
+docker-compose run --rm app python pipelines/kafka/consumer.py --batch-size 500
+```
+``
+# entrainer le modele
+```bash
+docker-compose run --rm app python pipelines/ml/modele.py
 ```
 
-**Lancement normal (batch de 200 messages par défaut) :**
+# mettre les données dans gold
+
 ```bash
-docker-compose run --rm app python pipelines/kafka/consumer.py
+ docker-compose exec spark-master /opt/spark/bin/spark-submit /app/pipelines/spark/aggregation_analyse.py
 ```
 
 Résultat attendu :
@@ -226,6 +223,7 @@ Résultat attendu :
 > 💡 Tu peux lancer le consumer **avant** les producers : il attendra les messages patiemment.
 
 ---
+
 
 ## Étape 7 — Vérifier dans MinIO
 
