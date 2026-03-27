@@ -1,9 +1,9 @@
 version: '3.8'
 
 # =============================================================
-#  PROJET DPE — Séance 1
-#  Stack : Kafka (KRaft) + MinIO (Data Lake)
-#  Architecture : Open Data -> Kafka -> MinIO/bronze
+#  PROJET DPE — Séance 2
+#  Stack : Kafka (KRaft) + MinIO + Spark
+#  Architecture : Bronze -> Spark -> Silver
 # =============================================================
 
 networks:
@@ -26,8 +26,8 @@ services:
     networks:
       - dpe-network
     ports:
-      - "9092:9092"         # Pour les producers/consumers dans les conteneurs
-      - "9094:9094"         # Pour les connexions depuis ta machine locale
+      - "9092:9092"
+      - "9094:9094"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -41,7 +41,7 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"  # On crée les topics manuellement
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_LOG_RETENTION_HOURS: 168
     healthcheck:
       test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
@@ -50,7 +50,7 @@ services:
       retries: 5
 
   # -----------------------------------------------------------
-  # 2. KAFKA UI — Visualiser les topics et messages
+  # 2. KAFKA UI
   #    Accès : http://localhost:8090
   # -----------------------------------------------------------
   kafka-ui:
@@ -68,7 +68,7 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka:9092"
 
   # -----------------------------------------------------------
-  # 3. MINIO — Data Lake (stockage objet compatible S3)
+  # 3. MINIO — Data Lake
   #    Console web : http://localhost:9001
   #    API S3      : http://localhost:9000
   # -----------------------------------------------------------
@@ -79,13 +79,13 @@ services:
     networks:
       - dpe-network
     ports:
-      - "9000:9000"         # API S3 (utilisée par le consumer Python)
-      - "9001:9001"         # Console web MinIO
+      - "9000:9000"
+      - "9001:9001"
     environment:
-      MINIO_ROOT_USER: admin          # Login console MinIO
-      MINIO_ROOT_PASSWORD: admin123   # Mot de passe (min 8 caractères)
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: admin123
     volumes:
-      - minio-data:/data              # Persistance des fichiers
+      - minio-data:/data
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
@@ -94,22 +94,17 @@ services:
       retries: 5
 
   # -----------------------------------------------------------
-  # 4. APP — Conteneur Python pour producer et consumer
-  #    Tout le monde utilise Python 3.11.9, peu importe la machine
-  #    Usage :
-  #      docker-compose run --rm app python pipelines/kafka/producer.py --limite 100
-  #      docker-compose run --rm app python pipelines/kafka/consumer.py
+  # 4. APP — Conteneur Python (Kafka producers/consumers)
   # -----------------------------------------------------------
   app:
-    build: .                              # Construit depuis le Dockerfile
+    build: .
     container_name: app
     networks:
       - dpe-network
     volumes:
-      - ./pipelines:/app/pipelines        # Monte tout le dossier pipelines/
-      - ./datalake:/datalake              # Monte le dossier datalake
+      - ./pipelines:/app/pipelines
+      - ./datalake:/datalake
     environment:
-      # Dans Docker, on communique via les noms des conteneurs (pas localhost)
       KAFKA_BROKER: "kafka:9092"
       MINIO_ENDPOINT: "minio:9000"
       MINIO_USER: "admin"
@@ -121,8 +116,7 @@ services:
         condition: service_healthy
 
   # -----------------------------------------------------------
-  # 5. MINIO INIT — Crée automatiquement le bucket "datalake"
-  #    Ce conteneur s'exécute une fois puis s'arrête
+  # 5. MINIO INIT — Crée le bucket "datalake"
   # -----------------------------------------------------------
   minio-init:
     image: minio/mc:latest
@@ -138,3 +132,74 @@ services:
       mc mb --ignore-existing local/datalake;
       echo '✅ Bucket datalake créé avec succès';
       "
+
+  # -----------------------------------------------------------
+  # 6. SPARK MASTER — Chef d orchestre Spark
+  #    Spark UI : http://localhost:8081
+  # -----------------------------------------------------------
+  spark-master:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: spark-master
+    hostname: spark-master
+    networks:
+      - dpe-network
+    ports:
+      - "8081:8080"         # Spark Master UI
+      - "7077:7077"         # Port de communication interne Spark
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    volumes:
+      - ./pipelines:/app/pipelines
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  # -----------------------------------------------------------
+  # 7. SPARK WORKER — Executant des taches Spark
+  # -----------------------------------------------------------
+  spark-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: spark-worker
+    hostname: spark-worker
+    networks:
+      - dpe-network
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+      SPARK_WORKER_MEMORY: "2g"
+      SPARK_WORKER_CORES: "2"
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    volumes:
+      - ./pipelines:/app/pipelines
+    depends_on:
+      - spark-master
+
+  # -----------------------------------------------------------
+  # 8. STREAMLIT — Dashboard de visualisation
+  #    Accès : http://localhost:8501
+  # -----------------------------------------------------------
+  streamlit:
+    build: .
+    container_name: streamlit
+    hostname: streamlit
+    networks:
+      - dpe-network
+    ports:
+      - "8501:8501"
+    environment:
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_USER: "admin"
+      MINIO_PASSWORD: "admin123"
+    volumes:
+      - ./pipelines:/app/pipelines
+    command: streamlit run /app/pipelines/analyse/dashboard.py
+             --server.port=8501
+             --server.address=0.0.0.0
+             --server.headless=true
+    depends_on:
+      minio:
+        condition: service_healthy

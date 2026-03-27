@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────────────────
+#  Dockerfile.spark — Image Spark avec connecteur MinIO/S3A
+#  Les jars hadoop-aws sont téléchargés au moment du build
+#  → plus besoin de --packages au lancement
+#
+#  Note : Python est déjà inclus dans apache/spark:3.5.0
+#  On ajoute uniquement les jars pour la connexion MinIO/S3A
+# ─────────────────────────────────────────────────────────────
+
+FROM apache/spark:3.5.0
+
+# On passe en root pour pouvoir écrire dans /opt/spark/jars/
+USER root
+
+# Télécharge les deux jars nécessaires pour que Spark parle à MinIO
+# hadoop-aws    : connecteur S3A (protocole compatible S3)
+# aws-java-sdk  : librairie Amazon utilisée par hadoop-aws
+RUN curl -o /opt/spark/jars/hadoop-aws-3.3.4.jar \
+    https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar && \
+    curl -o /opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
+    https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar
+
+# Crée le dossier cache Ivy avec les bonnes permissions
+RUN mkdir -p /home/spark/.ivy2/cache && \
+    chown -R spark:spark /home/spark/.ivy2
+
+# Repasse sur l'utilisateur spark
+USER spark
+
+WORKDIR /app
