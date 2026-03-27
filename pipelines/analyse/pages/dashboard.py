@@ -1,8 +1,5 @@
 """
-dashboard.py
-------------
-Page Dashboard — Analyse interactive des données DPE
-Graphiques Plotly + filtres sidebar + simulateur
+dashboard.py — Dashboard DPE — Apple-style, filters in sidebar
 """
 
 import streamlit as st
@@ -14,484 +11,208 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.data_loader import charger_gains_et_metriques, charger_details_logements, PRIX_KWH
 
-# ── Couleurs DPE officielles ──────────────────────────────────
 COULEURS_DPE = {
-    "A": "#009900", "B": "#33CC00", "C": "#99CC00",
-    "D": "#FFCC00", "E": "#FF9900", "F": "#FF3300", "G": "#CC0000",
+    "A": "#34c759", "B": "#30d158", "C": "#a2c039",
+    "D": "#ffd60a", "E": "#ff9f0a", "F": "#ff453a", "G": "#d70015",
 }
 
-DASHBOARD_CSS = """
-<style>
-.dashboard-header {
-    background: linear-gradient(135deg, #0a3d1f 0%, #145a32 60%, #1e8449 100%);
-    border-radius: 16px;
-    padding: 1.8rem 2rem;
-    margin-bottom: 1.5rem;
-    color: white;
-}
-.dashboard-header h2 {
-    margin: 0;
-    font-size: 1.6rem;
-    font-weight: 700;
-}
-.dashboard-header p {
-    margin: 0.3rem 0 0 0;
-    opacity: 0.85;
-    font-size: 0.95rem;
-}
-.section-divider {
-    height: 2px;
-    background: linear-gradient(90deg, transparent, rgba(46,204,113,0.3), transparent);
-    margin: 1.5rem 0;
-    border: none;
-}
-</style>
-"""
+PLOTLY_LAYOUT = dict(
+    plot_bgcolor="#ffffff",
+    paper_bgcolor="#ffffff",
+    font=dict(color="#6e6e73", family="Inter", size=12),
+    margin=dict(l=10, r=10, t=30, b=10),
+    height=340,
+)
 
-
-# ══════════════════════════════════════════════════════════════
-#  RENDER PRINCIPAL
-# ══════════════════════════════════════════════════════════════
 
 def render():
-    """Affiche la page Dashboard."""
+    gains, metriques, gains_sim = charger_gains_et_metriques()
+    details, details_sim = charger_details_logements()
 
-    st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
+    if gains_sim or details_sim:
+        st.caption("📎 Mode démo — données simulées")
 
-    # ── Header ─────────────────────────────────────────────────
-    st.markdown("""
-    <div class="dashboard-header">
-        <h2>📊 Dashboard d'Analyse DPE</h2>
-        <p>Explorez les données de performance énergétique — Consommation, classes DPE, gains potentiels</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── Chargement des données ─────────────────────────────────
-    gains, metriques, gains_simule = charger_gains_et_metriques()
-    details, details_simule = charger_details_logements()
-
-    if gains_simule or details_simule:
-        st.info(
-            "📎 **Mode démonstration** — Les données affichées sont simulées. "
-            "Lancez le pipeline complet (Bronze → Silver → Gold) pour utiliser vos données réelles."
-        )
-
-    # ── Filtres sidebar ────────────────────────────────────────
+    # ── Sidebar filters ───────────────────────────────────────
     with st.sidebar:
-        st.markdown("### 🔍 Filtres")
+        st.markdown("#### 🔍 Filtres")
 
-        # Filtre classe DPE
-        classes_disponibles = sorted(details["etiquette_dpe"].unique())
-        classes_selectionnees = st.multiselect(
-            "Classe DPE",
-            options=classes_disponibles,
-            default=classes_disponibles,
-            key="filtre_classe"
-        )
+        classes_dispo = sorted(details["etiquette_dpe"].unique())
+        classes_sel = st.multiselect("Classe DPE", classes_dispo, default=classes_dispo, key="f_cls")
 
-        # Filtre surface
-        min_surf = int(details["surface_habitable_logement"].min())
-        max_surf = int(details["surface_habitable_logement"].max())
-        surface_range = st.slider(
-            "Surface (m²)",
-            min_value=min_surf,
-            max_value=max_surf,
-            value=(min_surf, max_surf),
-            key="filtre_surface"
-        )
+        min_s = int(details["surface_habitable_logement"].min())
+        max_s = int(details["surface_habitable_logement"].max())
+        surf_range = st.slider("Surface (m²)", min_s, max_s, (min_s, max_s), key="f_surf")
 
-        # Filtre type bâtiment
-        types_disponibles = sorted(details["type_batiment"].unique())
-        types_selectionnes = st.multiselect(
-            "Type de bâtiment",
-            options=types_disponibles,
-            default=types_disponibles,
-            key="filtre_type"
-        )
+        types_dispo = sorted(details["type_batiment"].unique())
+        types_sel = st.multiselect("Type bâtiment", types_dispo, default=types_dispo, key="f_type")
 
         st.markdown("---")
         st.caption(f"📊 {len(details):,} logements au total")
 
-    # ── Appliquer les filtres ──────────────────────────────────
-    df_filtre = details[
-        (details["etiquette_dpe"].isin(classes_selectionnees)) &
-        (details["surface_habitable_logement"] >= surface_range[0]) &
-        (details["surface_habitable_logement"] <= surface_range[1]) &
-        (details["type_batiment"].isin(types_selectionnes))
+    df = details[
+        (details["etiquette_dpe"].isin(classes_sel)) &
+        (details["surface_habitable_logement"].between(*surf_range)) &
+        (details["type_batiment"].isin(types_sel))
     ]
 
-    if df_filtre.empty:
-        st.warning("Aucun logement ne correspond aux filtres sélectionnés.")
+    if df.empty:
+        st.warning("Aucun logement ne correspond aux filtres.")
         return
 
-    # ── KPIs ───────────────────────────────────────────────────
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Logements filtrés", f"{len(df_filtre):,}")
-    with col2:
-        conso_moy = df_filtre["conso_5_usages_par_m2_ef"].mean()
-        st.metric("Conso. moyenne", f"{conso_moy:.0f} kWh/m²/an")
-    with col3:
-        surface_moy = df_filtre["surface_habitable_logement"].mean()
-        st.metric("Surface moyenne", f"{surface_moy:.0f} m²")
-    with col4:
-        cout_moy = df_filtre["cout_total_5_usages"].mean()
-        st.metric("Coût moyen 5 usages", f"{cout_moy:,.0f} €/an")
+    # ── KPIs ──────────────────────────────────────────────────
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Logements", f"{len(df):,}")
+    k2.metric("Conso. moy.", f"{df['conso_5_usages_par_m2_ef'].mean():.0f} kWh/m²/an")
+    k3.metric("Surface moy.", f"{df['surface_habitable_logement'].mean():.0f} m²")
+    k4.metric("Coût moy.", f"{df['cout_total_5_usages'].mean():,.0f} €/an")
 
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    st.markdown("")
 
-    # ── Ligne 1 : Distribution DPE + Conso par classe ─────────
-    col_g, col_d = st.columns(2)
+    # ── Row 1 ─────────────────────────────────────────────────
+    c1, c2 = st.columns(2)
 
-    with col_g:
-        _afficher_distribution_dpe(df_filtre)
+    with c1:
+        st.markdown("##### 🏷️ Distribution des classes DPE")
+        dist = df["etiquette_dpe"].value_counts().sort_index().reset_index()
+        dist.columns = ["Classe", "Nombre"]
+        fig = px.bar(dist, x="Classe", y="Nombre", color="Classe",
+                     color_discrete_map=COULEURS_DPE, text="Nombre")
+        fig.update_traces(textposition="outside", texttemplate="%{text:,}")
+        fig.update_layout(**PLOTLY_LAYOUT, showlegend=False, xaxis_title="", yaxis_title="")
+        st.plotly_chart(fig, use_container_width=True)
 
-    with col_d:
-        _afficher_conso_par_classe(df_filtre)
+    with c2:
+        st.markdown("##### 🔥 Consommation par classe")
+        conso = df.groupby("etiquette_dpe")["conso_5_usages_par_m2_ef"].mean().reset_index()
+        conso.columns = ["Classe", "Conso"]
+        conso = conso.sort_values("Classe")
+        fig = px.bar(conso, x="Conso", y="Classe", orientation="h",
+                     color="Classe", color_discrete_map=COULEURS_DPE, text="Conso")
+        fig.update_traces(texttemplate="%{text:.0f} kWh/m²", textposition="outside")
+        fig.update_layout(**PLOTLY_LAYOUT, showlegend=False,
+                          yaxis=dict(categoryorder="category descending"),
+                          xaxis_title="", yaxis_title="")
+        st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    # ── Row 2 ─────────────────────────────────────────────────
+    c3, c4 = st.columns(2)
 
-    # ── Ligne 2 : Gains + Répartition par type ────────────────
-    col_g2, col_d2 = st.columns(2)
+    with c3:
+        st.markdown("##### 📈 Gains par transition")
+        trans = gains[gains["transition"].isin(["F->E", "E->D", "D->C", "C->B"])].copy()
+        if not trans.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=trans["transition"], y=trans["gain_moyen_kwh_an"],
+                marker_color=["#ff453a", "#ff9f0a", "#ffd60a", "#30d158"],
+                text=trans["gain_moyen_kwh_an"].apply(lambda x: f"{x:,.0f}"),
+                textposition="outside", name="kWh/an"
+            ))
+            fig.add_trace(go.Scatter(
+                x=trans["transition"], y=trans["gain_moyen_eur_an"],
+                mode="lines+markers+text", yaxis="y2",
+                marker=dict(size=9, color="#0071e3"),
+                line=dict(color="#0071e3", width=2),
+                text=trans["gain_moyen_eur_an"].apply(lambda x: f"{x:,.0f}€"),
+                textposition="top center", name="€/an"
+            ))
+            fig.update_layout(
+                **PLOTLY_LAYOUT,
+                yaxis=dict(showgrid=False, title=""),
+                yaxis2=dict(overlaying="y", side="right", showgrid=False, title=""),
+                legend=dict(orientation="h", y=1.12, font=dict(color="#86868b")),
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
-    with col_g2:
-        transitions_simples = gains[gains["transition"].isin(
-            ["F->E", "E->D", "D->C", "C->B"]
-        )].copy()
-        _afficher_gains_barres(transitions_simples)
-
-    with col_d2:
-        _afficher_repartition_type(df_filtre)
-
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-
-    # ── Ligne 3 : Conso par période + Tableau gains ──────────
-    col_g3, col_d3 = st.columns(2)
-
-    with col_g3:
-        _afficher_conso_par_periode(df_filtre)
-
-    with col_d3:
-        _afficher_tableau_gains(gains)
-
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-
-    # ── Simulateur ─────────────────────────────────────────────
-    _afficher_simulateur(gains)
-
-    # ── Métriques modèle ───────────────────────────────────────
-    _afficher_metriques_modele(metriques)
-
-
-# ══════════════════════════════════════════════════════════════
-#  GRAPHIQUES
-# ══════════════════════════════════════════════════════════════
-
-def _afficher_distribution_dpe(df):
-    """Distribution des classes DPE (barres verticales colorées)."""
-    st.subheader("🏷️ Distribution des classes DPE")
-
-    dist = df["etiquette_dpe"].value_counts().sort_index().reset_index()
-    dist.columns = ["Classe", "Nombre"]
-
-    fig = px.bar(
-        dist, x="Classe", y="Nombre",
-        color="Classe",
-        color_discrete_map=COULEURS_DPE,
-        text="Nombre"
-    )
-    fig.update_traces(textposition="outside", texttemplate="%{text:,}")
-    fig.update_layout(
-        showlegend=False,
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        height=380,
-        xaxis_title="Classe DPE",
-        yaxis_title="Nombre de logements",
-        font=dict(color="#e0e0e0"),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def _afficher_conso_par_classe(df):
-    """Consommation moyenne par classe DPE (barres horizontales)."""
-    st.subheader("🔥 Consommation par classe DPE")
-
-    conso = df.groupby("etiquette_dpe")["conso_5_usages_par_m2_ef"].mean().reset_index()
-    conso.columns = ["Classe", "Conso (kWh/m²/an)"]
-    conso = conso.sort_values("Classe")
-
-    fig = px.bar(
-        conso, x="Conso (kWh/m²/an)", y="Classe",
-        orientation="h",
-        color="Classe",
-        color_discrete_map=COULEURS_DPE,
-        text="Conso (kWh/m²/an)"
-    )
-    fig.update_traces(texttemplate="%{text:.0f} kWh/m²", textposition="outside")
-    fig.update_layout(
-        showlegend=False,
-        yaxis=dict(categoryorder="category descending"),
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        height=380,
-        font=dict(color="#e0e0e0"),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def _afficher_gains_barres(transitions):
-    """Gains kWh/an par transition avec ligne €/an."""
-    st.subheader("📈 Gains par transition DPE")
-
-    if transitions.empty:
-        st.info("Pas de transitions disponibles.")
-        return
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Bar(
-        name="Gain kWh/an",
-        x=transitions["transition"],
-        y=transitions["gain_moyen_kwh_an"],
-        marker_color=["#FF3300", "#FF9900", "#FFCC00", "#99CC00"],
-        text=transitions["gain_moyen_kwh_an"].apply(lambda x: f"{x:,.0f} kWh"),
-        textposition="outside",
-        yaxis="y"
-    ))
-
-    fig.add_trace(go.Scatter(
-        name="Gain €/an",
-        x=transitions["transition"],
-        y=transitions["gain_moyen_eur_an"],
-        mode="lines+markers+text",
-        marker=dict(size=10, color="#2ecc71"),
-        line=dict(color="#2ecc71", width=2.5),
-        text=transitions["gain_moyen_eur_an"].apply(lambda x: f"{x:,.0f} €"),
-        textposition="top center",
-        yaxis="y2"
-    ))
-
-    fig.update_layout(
-        yaxis=dict(title="kWh/an", titlefont=dict(color="#e0e0e0")),
-        yaxis2=dict(title="€/an", overlaying="y", side="right", titlefont=dict(color="#2ecc71")),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, font=dict(color="#e0e0e0")),
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        height=380,
-        font=dict(color="#e0e0e0"),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption(f"Hypothèse : {PRIX_KWH} €/kWh — surface moyenne ~72 m²")
-
-
-def _afficher_repartition_type(df):
-    """Répartition par type de bâtiment (donut chart)."""
-    st.subheader("🏠 Répartition par type de bâtiment")
-
-    repartition = df["type_batiment"].value_counts().reset_index()
-    repartition.columns = ["Type", "Nombre"]
-
-    couleurs_type = ["#2ecc71", "#3498db", "#e67e22", "#9b59b6", "#e74c3c"]
-
-    fig = go.Figure(data=[go.Pie(
-        labels=repartition["Type"],
-        values=repartition["Nombre"],
-        hole=0.45,
-        marker=dict(colors=couleurs_type[:len(repartition)]),
-        textinfo="label+percent",
-        textfont=dict(size=13, color="#e0e0e0"),
-    )])
-    fig.update_layout(
-        showlegend=False,
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        height=380,
-        font=dict(color="#e0e0e0"),
-        annotations=[dict(
-            text=f"<b>{len(df):,}</b><br>logements",
-            x=0.5, y=0.5,
-            font_size=14, font_color="#2ecc71",
-            showarrow=False
-        )]
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def _afficher_conso_par_periode(df):
-    """Consommation moyenne par période de construction."""
-    st.subheader("📅 Consommation par période de construction")
-
-    if "periode_construction" not in df.columns:
-        st.info("Colonne 'periode_construction' non disponible.")
-        return
-
-    periode = df.groupby("periode_construction")["conso_5_usages_par_m2_ef"].mean().reset_index()
-    periode.columns = ["Période", "Conso (kWh/m²/an)"]
-
-    # Tri chronologique
-    ordre = ["Avant 1975", "1975-1989", "1990-2005", "2006-2012 (RT2005)", "Après 2012 (RT2012)"]
-    periode["Période"] = pd.Categorical(periode["Période"], categories=ordre, ordered=True)
-    periode = periode.sort_values("Période").dropna(subset=["Période"])
-
-    fig = px.bar(
-        periode, x="Période", y="Conso (kWh/m²/an)",
-        text="Conso (kWh/m²/an)",
-        color="Conso (kWh/m²/an)",
-        color_continuous_scale=["#2ecc71", "#f39c12", "#e74c3c"],
-    )
-    fig.update_traces(texttemplate="%{text:.0f}", textposition="outside")
-    fig.update_layout(
-        showlegend=False,
-        coloraxis_showscale=False,
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        height=380,
-        xaxis_title="",
-        yaxis_title="kWh/m²/an",
-        font=dict(color="#e0e0e0"),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def _afficher_tableau_gains(gains):
-    """Tableau complet des gains par transition."""
-    st.subheader("📋 Tableau des gains par transition")
-
-    cols_affichage = [
-        "transition", "conso_moyenne_depart_kwh_m2",
-        "conso_moyenne_arrivee_kwh_m2", "gain_moyen_kwh_m2_an",
-        "gain_moyen_kwh_an", "gain_moyen_eur_an", "nb_logements"
-    ]
-
-    # Vérifier que toutes les colonnes existent
-    cols_ok = [c for c in cols_affichage if c in gains.columns]
-    df_aff = gains[cols_ok].copy()
-
-    noms = {
-        "transition": "Transition",
-        "conso_moyenne_depart_kwh_m2": "Conso départ (kWh/m²/an)",
-        "conso_moyenne_arrivee_kwh_m2": "Conso arrivée (kWh/m²/an)",
-        "gain_moyen_kwh_m2_an": "Gain (kWh/m²/an)",
-        "gain_moyen_kwh_an": "Gain (kWh/an)",
-        "gain_moyen_eur_an": "Gain (€/an)",
-        "nb_logements": "Nb logements"
-    }
-    df_aff = df_aff.rename(columns=noms)
-
-    if "Gain (€/an)" in df_aff.columns:
-        df_aff["Gain (€/an)"] = df_aff["Gain (€/an)"].apply(lambda x: f"{x:,.0f} €")
-    if "Gain (kWh/an)" in df_aff.columns:
-        df_aff["Gain (kWh/an)"] = df_aff["Gain (kWh/an)"].apply(lambda x: f"{x:,.0f}")
-    if "Nb logements" in df_aff.columns:
-        df_aff["Nb logements"] = df_aff["Nb logements"].apply(lambda x: f"{x:,}")
-
-    st.dataframe(df_aff, use_container_width=True, hide_index=True, height=250)
-
-
-# ══════════════════════════════════════════════════════════════
-#  SIMULATEUR
-# ══════════════════════════════════════════════════════════════
-
-def _afficher_simulateur(gains):
-    """Simulateur de gains personnalisé."""
-    st.subheader("🧮 Simulateur de gains personnalisé")
-    st.markdown("Estimez vos économies en renseignant votre logement :")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        surface = st.number_input(
-            "Surface du logement (m²)",
-            min_value=10, max_value=500, value=75, step=5,
-            key="simu_surface"
+    with c4:
+        st.markdown("##### 🏠 Répartition par type")
+        rep = df["type_batiment"].value_counts().reset_index()
+        rep.columns = ["Type", "Nombre"]
+        fig = go.Figure(go.Pie(
+            labels=rep["Type"], values=rep["Nombre"], hole=0.5,
+            marker=dict(colors=["#0071e3", "#34c759", "#ff9500", "#af52de"]),
+            textinfo="label+percent",
+            textfont=dict(size=12, color="#6e6e73"),
+        ))
+        fig.update_layout(
+            **PLOTLY_LAYOUT, showlegend=False,
+            annotations=[dict(text=f"<b>{len(df):,}</b>", x=0.5, y=0.5,
+                              font_size=15, font_color="#0071e3", showarrow=False)]
         )
-        prix_kwh = st.number_input(
-            "Prix du kWh (€)",
-            min_value=0.10, max_value=0.50, value=PRIX_KWH,
-            step=0.01, format="%.2f", key="simu_prix"
-        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    with col2:
-        classes_dispo = sorted(
-            set(gains["classe_depart"].tolist() + gains["classe_arrivee"].tolist())
-        )
-        classe_depart = st.selectbox(
-            "Classe DPE actuelle",
-            options=classes_dispo,
-            index=classes_dispo.index("F") if "F" in classes_dispo else 0,
-            key="simu_depart"
-        )
-        classe_arrivee = st.selectbox(
-            "Classe DPE cible (après rénovation)",
-            options=classes_dispo,
-            index=classes_dispo.index("C") if "C" in classes_dispo else 0,
-            key="simu_arrivee"
-        )
+    # ── Row 3 ─────────────────────────────────────────────────
+    c5, c6 = st.columns(2)
 
-    transition_label = f"{classe_depart}->{classe_arrivee}"
-    row = gains[gains["transition"] == transition_label]
+    with c5:
+        st.markdown("##### 📅 Consommation par période")
+        if "periode_construction" in df.columns:
+            per = df.groupby("periode_construction")["conso_5_usages_par_m2_ef"].mean().reset_index()
+            per.columns = ["Période", "Conso"]
+            ordre = ["Avant 1975", "1975-1989", "1990-2005", "2006-2012 (RT2005)", "Après 2012 (RT2012)"]
+            per["Période"] = pd.Categorical(per["Période"], categories=ordre, ordered=True)
+            per = per.sort_values("Période").dropna(subset=["Période"])
+            fig = px.bar(per, x="Période", y="Conso", text="Conso",
+                         color="Conso", color_continuous_scale=["#34c759", "#ffd60a", "#ff453a"])
+            fig.update_traces(texttemplate="%{text:.0f}", textposition="outside")
+            fig.update_layout(**PLOTLY_LAYOUT, showlegend=False, coloraxis_showscale=False,
+                              xaxis_title="", yaxis_title="")
+            st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("---")
+    with c6:
+        st.markdown("##### 📋 Tableau des gains")
+        cols_ok = [c for c in ["transition", "gain_moyen_kwh_m2_an", "gain_moyen_kwh_an",
+                                "gain_moyen_eur_an"] if c in gains.columns]
+        df_g = gains[cols_ok].copy()
+        noms = {"transition": "Transition", "gain_moyen_kwh_m2_an": "kWh/m²/an",
+                "gain_moyen_kwh_an": "kWh/an", "gain_moyen_eur_an": "€/an"}
+        df_g = df_g.rename(columns=noms)
+        if "€/an" in df_g.columns:
+            df_g["€/an"] = df_g["€/an"].apply(lambda x: f"{x:,.0f} €")
+        if "kWh/an" in df_g.columns:
+            df_g["kWh/an"] = df_g["kWh/an"].apply(lambda x: f"{x:,.0f}")
+        st.dataframe(df_g, use_container_width=True, hide_index=True, height=280)
 
-    if classe_depart == classe_arrivee:
-        st.warning("⚠️ La classe de départ et la classe cible sont identiques.")
+    st.markdown("")
+
+    # ── Simulateur ────────────────────────────────────────────
+    st.markdown("##### 🧮 Simulateur personnalisé")
+
+    s1, s2 = st.columns(2)
+    with s1:
+        surface = st.number_input("Surface (m²)", 10, 500, 75, 5, key="sim_s")
+        prix = st.number_input("Prix kWh (€)", 0.10, 0.50, PRIX_KWH, 0.01, format="%.2f", key="sim_p")
+    with s2:
+        cls_list = sorted(set(gains["classe_depart"].tolist() + gains["classe_arrivee"].tolist()))
+        depart = st.selectbox("Classe actuelle", cls_list,
+                              index=cls_list.index("F") if "F" in cls_list else 0, key="sim_d")
+        arrivee = st.selectbox("Classe cible", cls_list,
+                               index=cls_list.index("C") if "C" in cls_list else 0, key="sim_a")
+
+    label = f"{depart}->{arrivee}"
+    row = gains[gains["transition"] == label]
+
+    if depart == arrivee:
+        st.warning("Les deux classes sont identiques.")
     elif row.empty:
-        st.warning(f"La transition {transition_label} n'est pas disponible. Essayez F→E, E→D, D→C ou C→B.")
+        st.warning(f"Transition {label} non disponible.")
     else:
-        gain_m2 = float(row["gain_moyen_kwh_m2_an"].values[0])
-        gain_kwh = gain_m2 * surface
-        gain_eur = gain_kwh * prix_kwh
+        g_m2 = float(row["gain_moyen_kwh_m2_an"].values[0])
+        g_kwh = g_m2 * surface
+        g_eur = g_kwh * prix
         conso_dep = float(row["conso_moyenne_depart_kwh_m2"].values[0]) * surface
         conso_arr = float(row["conso_moyenne_arrivee_kwh_m2"].values[0]) * surface
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric(f"Conso actuelle ({classe_depart})", f"{conso_dep:,.0f} kWh/an")
-        with c2:
-            st.metric(f"Après rénovation ({classe_arrivee})", f"{conso_arr:,.0f} kWh/an",
-                      delta=f"-{gain_kwh:,.0f} kWh/an")
-        with c3:
-            st.metric("💰 Économie estimée", f"{gain_eur:,.0f} €/an",
-                      delta=f"{gain_m2:.1f} kWh/m²/an économisés")
+        r1, r2, r3 = st.columns(3)
+        r1.metric(f"Conso ({depart})", f"{conso_dep:,.0f} kWh/an")
+        r2.metric(f"Après ({arrivee})", f"{conso_arr:,.0f} kWh/an", delta=f"-{g_kwh:,.0f} kWh")
+        r3.metric("Économie", f"{g_eur:,.0f} €/an")
 
-        cout_renov = surface * 200
-        if gain_eur > 0:
-            retour = cout_renov / gain_eur
-            st.info(
-                f"💡 **Retour sur investissement** : pour des travaux estimés à "
-                f"{cout_renov:,.0f} € (200 €/m²), retour en **{retour:.0f} ans** "
-                f"à {prix_kwh} €/kWh."
-            )
+    st.markdown("")
 
-        st.caption("⚠️ Estimations basées sur des moyennes statistiques.")
-
-
-# ══════════════════════════════════════════════════════════════
-#  MÉTRIQUES MODÈLE
-# ══════════════════════════════════════════════════════════════
-
-def _afficher_metriques_modele(metriques):
-    """Affiche les métriques du modèle ML."""
-    with st.expander("🤖 Informations sur le modèle ML"):
-        st.markdown("""
-        **Modèle :** Ridge Regression (Scikit-learn)
-
-        **Features :** type d'énergie chauffage/ECS, ventilation, type de bâtiment,
-        période de construction, zone climatique, nombre de niveaux, hauteur sous plafond.
-
-        **Target :** `conso_5_usages_par_m2_ef` (kWh/m²/an)
-
-        **Données :** Dataset ADEME dpe03existant — logements existants
-        """)
-
+    with st.expander("🤖 Infos modèle ML"):
         if isinstance(metriques, dict):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.metric("MAE", f"{metriques.get('mae', 0):.2f} kWh/m²/an")
-            with c2:
-                st.metric("RMSE", f"{metriques.get('rmse', 0):.2f} kWh/m²/an")
-            with c3:
-                st.metric("R² Test", f"{metriques.get('r2_test', 0):.4f}")
-        elif isinstance(metriques, list):
-            st.dataframe(pd.DataFrame(metriques), use_container_width=True, hide_index=True)
+            m1, m2, m3 = st.columns(3)
+            m1.metric("MAE", f"{metriques.get('mae', 0):.1f} kWh/m²")
+            m2.metric("RMSE", f"{metriques.get('rmse', 0):.1f} kWh/m²")
+            m3.metric("R²", f"{metriques.get('r2_test', 0):.4f}")
