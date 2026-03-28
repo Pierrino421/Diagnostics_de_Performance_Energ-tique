@@ -85,6 +85,8 @@ minio-init   Exited (0)      ← normal, il s'arrête après avoir créé le buc
 
 ```bash
 docker-compose build app
+
+ docker compose --progress plain build --no-cache spark-master spark-worker
 ```
 
 Résultat attendu :
