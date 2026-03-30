@@ -1,0 +1,111 @@
+# =============================================================
+#  Extension Docker Compose — Services Airflow
+#
+#  Usage :
+#    docker-compose -f docker-compose.yml \
+#                   -f docker-compose.airflow.yml \
+#                   up -d
+#
+#  Airflow UI : http://localhost:8082
+#  Login      : admin / admin
+# =============================================================
+
+networks:
+  dpe-network:
+    driver: bridge
+
+services:
+
+  # ── Base de données Airflow (PostgreSQL) ───────────────────
+  airflow-db:
+    image: postgres:15
+    container_name: airflow-db
+    environment:
+      POSTGRES_USER    : airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB      : airflow
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test    : ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout : 5s
+      retries : 5
+    networks:
+      - dpe-network
+
+  # ── Initialisation (crée les tables + utilisateur admin) ───
+  airflow-init:
+    image: apache/airflow:2.9.1
+    container_name: airflow-init
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR             : LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN : postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES        : "false"
+    # Ajout des \ pour l'échappement des lignes Bash
+    command: bash -c "airflow db migrate && airflow users create --username admin --password admin --firstname Admin --lastname DPE --role Admin --email admin@dpe.fr && echo '✅ Airflow initialisé'"
+    networks:
+      - dpe-network
+
+  # ── Serveur Web Airflow (interface graphique) ───────────────
+  airflow-webserver:
+    image: apache/airflow:2.9.1
+    container_name: airflow-webserver
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR             : LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN : postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES        : "false"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG   : "true"
+    volumes:
+      # DAGs du projet
+      - ./pipelines/airflow/dags:/opt/airflow/dags
+      # Logs des exécutions
+      - ./pipelines/airflow/logs:/opt/airflow/logs
+      # Accès au socket Docker pour lancer docker exec
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8082:8080"     # ← 8082 pour ne pas conflits avec Spark UI (8081)
+    command: webserver
+    healthcheck:
+      test    : ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout : 10s
+      retries : 5
+    networks:
+      - dpe-network
+
+  # ── Scheduler Airflow (exécute les DAGs) ───────────────────
+  airflow-scheduler:
+    image: apache/airflow:2.9.1
+    container_name: airflow-scheduler
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR             : LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN : postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES        : "false"
+    volumes:
+      - ./pipelines/airflow/dags:/opt/airflow/dags
+      - ./pipelines/airflow/logs:/opt/airflow/logs
+      # Accès au socket Docker (indispensable pour docker exec)
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: scheduler
+    networks:
+      - dpe-network
+
+  # ── Override du service "app" ───────────────────────────────
+  # Par défaut, "app" s'arrête après son CMD ["python"].
+  # Pour que "docker exec app python ..." fonctionne depuis Airflow,
+  # le conteneur doit rester actif en permanence.
+  app:
+    command: tail -f /dev/null    # ← garde le conteneur actif indéfiniment
+
+volumes:
+  airflow_db_data:
